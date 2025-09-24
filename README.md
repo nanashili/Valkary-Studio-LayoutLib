@@ -38,6 +38,17 @@ Build and run the unit tests:
 zig build test
 ```
 
+The project also exposes a JSON-over-stdio daemon that can be launched with:
+
+```sh
+zig build daemon
+```
+
+The daemon reads framed XML requests from stdin and writes JSONC responses to
+stdout. Each response carries the base64 preview image and structured layout
+tree, making it straightforward to integrate with Swift or any other host
+language that can manage a child process.
+
 ## Usage example
 
 ```zig
@@ -77,6 +88,79 @@ pub fn main() !void {
 
 The example builds a small vertical layout composed of two text nodes and prints
 out the computed positions and dimensions for each child view.
+
+## Daemon protocol
+
+Each request begins with a `Content-Length` header that specifies the number of
+bytes that follow, immediately followed by a newline and the XML payload. The
+root element can either be a `<layout-request>` envelope or a layout root
+element such as `<LinearLayout>`. The optional envelope allows you to pass a
+correlation ID and layout constraints alongside the Android XML layout:
+
+```
+Content-Length: 333
+<layout-request id="example" action="render">
+  <constraint width="240" />
+  <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:padding="8dp">
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Hello" />
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="World" />
+  </LinearLayout>
+</layout-request>
+```
+
+The daemon replies with an JSONC object describing the computed layout tree. The
+response echoes the request ID when present, includes a base64 encoded PNG
+preview of the rendered hierarchy, and exposes the resolved frame, margin,
+padding, text, and orientation metadata directly within the JSON payload:
+
+```jsonc
+{
+  // Layout render payload encoded as JSON for Valkary Studio integration.
+  "status": "ok",
+  "result": {
+    "image": "iVBORw0KGgoAAAANSUhEUgAAA...",
+    "root": {
+      "type": "linear_layout",
+      "frame": { "x": 0, "y": 0, "width": 240, "height": 64 },
+      "margin": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+      "padding": { "left": 8, "top": 8, "right": 8, "bottom": 8 },
+      "orientation": "vertical",
+      "children": [
+        {
+          "type": "text",
+          "frame": { "x": 8, "y": 8, "width": 60, "height": 16 },
+          "margin": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "padding": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "text": "Hello",
+          "children": []
+        },
+        {
+          "type": "text",
+          "frame": { "x": 8, "y": 24, "width": 60, "height": 16 },
+          "margin": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "padding": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
+          "text": "World",
+          "children": []
+        }
+      ]
+    }
+  }
+}
+```
+
+Errors use the same JSONC envelope with `status: "error"` and an `error`
+object containing a descriptive `message`. Diagnostics are printed to stderr.
+Send EOF (Ctrl+D) to terminate the process.
 
 ## Roadmap
 
