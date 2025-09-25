@@ -6,6 +6,7 @@ const Constraint = layoutlib.Constraint;
 const Renderer = layoutlib.Renderer;
 const types = layoutlib.types;
 const preview = layoutlib.preview;
+const views = layoutlib.registry;
 
 const Action = enum { render };
 
@@ -486,9 +487,7 @@ fn buildLayoutNode(allocator: std.mem.Allocator, element: *const XmlElement) !La
 }
 
 fn parseViewType(name: []const u8) !types.ViewType {
-    if (std.mem.eql(u8, name, "LinearLayout")) return .linear_layout;
-    if (std.mem.eql(u8, name, "TextView")) return .text;
-    return .generic;
+    return views.inferViewType(name);
 }
 
 fn applyAttributes(allocator: std.mem.Allocator, node_instance: *LayoutNode, element: *const XmlElement) !void {
@@ -805,11 +804,7 @@ fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {
 }
 
 fn viewTypeName(view_type: types.ViewType) []const u8 {
-    return switch (view_type) {
-        .generic => "generic",
-        .text => "text",
-        .linear_layout => "linear_layout",
-    };
+    return views.label(view_type);
 }
 
 fn orientationName(orientation: types.Orientation) []const u8 {

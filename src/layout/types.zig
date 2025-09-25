@@ -7,6 +7,9 @@ pub const ViewType = enum {
     generic,
     text,
     linear_layout,
+    frame_layout,
+    relative_layout,
+    constraint_layout,
 };
 
 pub const SizeSpec = union(enum) {

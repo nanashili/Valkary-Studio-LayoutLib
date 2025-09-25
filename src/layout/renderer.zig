@@ -1,6 +1,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const node = @import("node.zig");
+const views = @import("view_registry.zig");
 
 pub const Constraint = struct {
     width: ?f32 = null,
@@ -47,13 +48,15 @@ pub const Renderer = struct {
     }
 
     fn layoutNode(self: *Renderer, layout_node: *const node.LayoutNode, constraint: Constraint) error{OutOfMemory}!RenderedNode {
+        const behavior = views.behavior(layout_node.view_type);
+
         var result = RenderedNode{
             .view_type = layout_node.view_type,
             .frame = .{},
             .margin = layout_node.params.margin,
             .padding = layout_node.params.padding,
             .text = layout_node.text,
-            .orientation = if (layout_node.view_type == .linear_layout) layout_node.orientation else null,
+            .orientation = if (behavior == .linear_container) layout_node.orientation else null,
             .children = .{},
         };
         errdefer result.deinit(self.allocator);
@@ -71,8 +74,8 @@ pub const Renderer = struct {
         const content_width_limit = types.subtractInsets(available_width, padding_horizontal);
         const content_height_limit = types.subtractInsets(available_height, padding_vertical);
 
-        switch (layout_node.view_type) {
-            .text => {
+        switch (behavior) {
+            .text_leaf => {
                 const measurement = measureText(layout_node.text orelse "", content_width_limit);
                 const measured_width = measurement.width + padding_horizontal;
                 const measured_height = measurement.height + padding_vertical;
@@ -80,33 +83,15 @@ pub const Renderer = struct {
                 result.frame.width = finalizeDimension(layout_node.params.width, measured_width, available_width);
                 result.frame.height = finalizeDimension(layout_node.params.height, measured_height, available_height);
             },
-            .generic => {
-                var measured_width = padding_horizontal;
-                var measured_height = padding_vertical;
-
-                var index: usize = 0;
-                while (index < layout_node.children.items.len) : (index += 1) {
-                    const child = &layout_node.children.items[index];
-                    var child_rendered = try self.layoutNode(child, Constraint{ .width = content_width_limit, .height = content_height_limit });
-
-                    const offset_x = layout_node.params.padding.left + child.params.margin.left;
-                    const offset_y = layout_node.params.padding.top + child.params.margin.top;
-                    child_rendered.frame.x = offset_x;
-                    child_rendered.frame.y = offset_y;
-
-                    const candidate_width = offset_x + child_rendered.frame.width + child.params.margin.right + layout_node.params.padding.right;
-                    const candidate_height = offset_y + child_rendered.frame.height + child.params.margin.bottom + layout_node.params.padding.bottom;
-
-                    measured_width = types.max(measured_width, candidate_width);
-                    measured_height = types.max(measured_height, candidate_height);
-
-                    result.children.appendAssumeCapacity(child_rendered);
-                }
+            .generic_container => {
+                const dims = try self.layoutFreeform(layout_node, content_width_limit, content_height_limit, &result);
+                const measured_width = dims.width + padding_horizontal;
+                const measured_height = dims.height + padding_vertical;
 
                 result.frame.width = finalizeDimension(layout_node.params.width, measured_width, available_width);
                 result.frame.height = finalizeDimension(layout_node.params.height, measured_height, available_height);
             },
-            .linear_layout => {
+            .linear_container => {
                 const dims = try self.layoutLinear(layout_node, content_width_limit, content_height_limit, &result);
                 const measured_width = dims.width + padding_horizontal;
                 const measured_height = dims.height + padding_vertical;
@@ -175,6 +160,38 @@ pub const Renderer = struct {
                 content_height = max_height;
             },
         }
+
+        return types.Size{ .width = content_width, .height = content_height };
+    }
+
+    fn layoutFreeform(self: *Renderer, layout_node: *const node.LayoutNode, width_limit: ?f32, height_limit: ?f32, result: *RenderedNode) error{OutOfMemory}!types.Size {
+        const padding_horizontal = layout_node.params.padding.totalHorizontal();
+        const padding_vertical = layout_node.params.padding.totalVertical();
+
+        var measured_width = padding_horizontal;
+        var measured_height = padding_vertical;
+
+        var index: usize = 0;
+        while (index < layout_node.children.items.len) : (index += 1) {
+            const child = &layout_node.children.items[index];
+            var child_rendered = try self.layoutNode(child, Constraint{ .width = width_limit, .height = height_limit });
+
+            const offset_x = layout_node.params.padding.left + child.params.margin.left;
+            const offset_y = layout_node.params.padding.top + child.params.margin.top;
+            child_rendered.frame.x = offset_x;
+            child_rendered.frame.y = offset_y;
+
+            const candidate_width = offset_x + child_rendered.frame.width + child.params.margin.right + layout_node.params.padding.right;
+            const candidate_height = offset_y + child_rendered.frame.height + child.params.margin.bottom + layout_node.params.padding.bottom;
+
+            measured_width = types.max(measured_width, candidate_width);
+            measured_height = types.max(measured_height, candidate_height);
+
+            result.children.appendAssumeCapacity(child_rendered);
+        }
+
+        const content_width = types.sanitize(measured_width - padding_horizontal);
+        const content_height = types.sanitize(measured_height - padding_vertical);
 
         return types.Size{ .width = content_width, .height = content_height };
     }

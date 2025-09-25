@@ -9,37 +9,43 @@ pub const LayoutNode = struct {
     orientation: types.Orientation = .vertical,
     children: std.ArrayListUnmanaged(LayoutNode) = .{},
 
-    pub fn setGeneric(params: types.LayoutParams) LayoutNode {
+    fn baseContainer(view_type: types.ViewType, params: types.LayoutParams) LayoutNode {
         return LayoutNode{
-            .view_type = .generic,
+            .view_type = view_type,
             .params = params,
             .text = null,
             .text_owned = false,
             .orientation = .vertical,
             .children = .{},
         };
+    }
+
+    pub fn setGeneric(params: types.LayoutParams) LayoutNode {
+        return baseContainer(.generic, params);
+    }
+
+    pub fn setFrameLayout(params: types.LayoutParams) LayoutNode {
+        return baseContainer(.frame_layout, params);
+    }
+
+    pub fn setRelativeLayout(params: types.LayoutParams) LayoutNode {
+        return baseContainer(.relative_layout, params);
+    }
+
+    pub fn setConstraintLayout(params: types.LayoutParams) LayoutNode {
+        return baseContainer(.constraint_layout, params);
     }
 
     pub fn setText(params: types.LayoutParams, content: []const u8) LayoutNode {
-        return LayoutNode{
-            .view_type = .text,
-            .params = params,
-            .text = content,
-            .text_owned = false,
-            .orientation = .vertical,
-            .children = .{},
-        };
+        var node_instance = baseContainer(.text, params);
+        node_instance.text = content;
+        return node_instance;
     }
 
     pub fn setLinearLayout(params: types.LayoutParams, orientation: types.Orientation) LayoutNode {
-        return LayoutNode{
-            .view_type = .linear_layout,
-            .params = params,
-            .text = null,
-            .text_owned = false,
-            .orientation = orientation,
-            .children = .{},
-        };
+        var node_instance = baseContainer(.linear_layout, params);
+        node_instance.orientation = orientation;
+        return node_instance;
     }
 
     pub fn addChild(self: *LayoutNode, allocator: std.mem.Allocator, child: LayoutNode) !void {

@@ -4,6 +4,7 @@ pub const types = @import("layout/types.zig");
 pub const node = @import("layout/node.zig");
 pub const renderer = @import("layout/renderer.zig");
 pub const preview = @import("layout/preview.zig");
+pub const registry = @import("layout/view_registry.zig");
 
 pub const EdgeInsets = types.EdgeInsets;
 pub const LayoutParams = types.LayoutParams;
