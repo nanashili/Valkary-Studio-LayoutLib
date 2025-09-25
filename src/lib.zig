@@ -12,6 +12,8 @@ pub const Orientation = types.Orientation;
 pub const SizeSpec = types.SizeSpec;
 pub const ViewType = types.ViewType;
 pub const Rect = types.Rect;
+pub const Color = types.Color;
+pub const FontMetrics = types.FontMetrics;
 
 pub const LayoutNode = node.LayoutNode;
 pub const Renderer = renderer.Renderer;

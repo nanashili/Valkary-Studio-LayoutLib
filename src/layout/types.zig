@@ -48,6 +48,26 @@ pub const LayoutParams = struct {
     padding: EdgeInsets = .{},
 };
 
+pub const Color = struct {
+    r: u8 = 0,
+    g: u8 = 0,
+    b: u8 = 0,
+    a: u8 = 0xFF,
+
+    pub fn rgb(r: u8, g: u8, b: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = 0xFF };
+    }
+};
+
+pub const FontMetrics = struct {
+    char_width: f32 = 7.0,
+    line_height: f32 = 16.0,
+
+    pub fn defaults() FontMetrics {
+        return .{};
+    }
+};
+
 pub const Rect = struct {
     x: f32 = 0,
     y: f32 = 0,

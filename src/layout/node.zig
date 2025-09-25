@@ -7,6 +7,9 @@ pub const LayoutNode = struct {
     text: ?[]const u8 = null,
     text_owned: bool = false,
     orientation: types.Orientation = .vertical,
+    background_color: ?types.Color = null,
+    text_color: ?types.Color = null,
+    font: ?types.FontMetrics = null,
     children: std.ArrayListUnmanaged(LayoutNode) = .{},
 
     fn baseContainer(view_type: types.ViewType, params: types.LayoutParams) LayoutNode {
@@ -16,6 +19,9 @@ pub const LayoutNode = struct {
             .text = null,
             .text_owned = false,
             .orientation = .vertical,
+            .background_color = null,
+            .text_color = null,
+            .font = null,
             .children = .{},
         };
     }

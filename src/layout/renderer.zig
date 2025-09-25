@@ -23,6 +23,9 @@ pub const RenderedNode = struct {
     padding: types.EdgeInsets = .{},
     text: ?[]const u8 = null,
     orientation: ?types.Orientation = null,
+    background_color: ?types.Color = null,
+    text_color: ?types.Color = null,
+    font: ?types.FontMetrics = null,
     children: std.ArrayListUnmanaged(RenderedNode) = .{},
 
     pub fn deinit(self: *RenderedNode, allocator: std.mem.Allocator) void {
@@ -57,6 +60,9 @@ pub const Renderer = struct {
             .padding = layout_node.params.padding,
             .text = layout_node.text,
             .orientation = if (behavior == .linear_container) layout_node.orientation else null,
+            .background_color = layout_node.background_color,
+            .text_color = layout_node.text_color,
+            .font = layout_node.font,
             .children = .{},
         };
         errdefer result.deinit(self.allocator);
@@ -76,7 +82,11 @@ pub const Renderer = struct {
 
         switch (behavior) {
             .text_leaf => {
-                const measurement = measureText(layout_node.text orelse "", content_width_limit);
+                const measurement = measureText(
+                    layout_node.text orelse "",
+                    content_width_limit,
+                    layout_node.font orelse types.FontMetrics.defaults(),
+                );
                 const measured_width = measurement.width + padding_horizontal;
                 const measured_height = measurement.height + padding_vertical;
 
@@ -201,9 +211,9 @@ fn finalizeDimension(spec: types.SizeSpec, measured: f32, available: ?f32) f32 {
     return types.sanitize(types.resolveDimension(spec, measured, available));
 }
 
-fn measureText(text: []const u8, width_limit: ?f32) types.Size {
-    const char_width: f32 = 7.0;
-    const line_height: f32 = 16.0;
+fn measureText(text: []const u8, width_limit: ?f32, font: types.FontMetrics) types.Size {
+    const char_width: f32 = font.char_width;
+    const line_height: f32 = font.line_height;
 
     if (text.len == 0) {
         return types.Size{ .width = 0, .height = 0 };

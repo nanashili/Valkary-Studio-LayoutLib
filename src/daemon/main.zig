@@ -20,6 +20,12 @@ const ParseError = error{
     InvalidSizeSpec,
     InvalidDimension,
     InvalidText,
+    InvalidColorResource,
+    UnknownColorResource,
+    InvalidColorReference,
+    InvalidFontResource,
+    UnknownFontResource,
+    InvalidFontReference,
 };
 
 const Request = struct {
@@ -27,10 +33,32 @@ const Request = struct {
     action: Action = .render,
     root: LayoutNode,
     constraint: Constraint = .{},
+    resources: Resources = .{},
 
     pub fn deinit(self: *Request, allocator: std.mem.Allocator) void {
         if (self.id) |id_slice| allocator.free(id_slice);
         self.root.deinit(allocator);
+        self.resources.deinit(allocator);
+    }
+};
+
+const Resources = struct {
+    colors: std.StringArrayHashMapUnmanaged(types.Color) = .{},
+    fonts: std.StringArrayHashMapUnmanaged(types.FontMetrics) = .{},
+
+    pub fn deinit(self: *Resources, allocator: std.mem.Allocator) void {
+        self.colors.deinit(allocator);
+        self.fonts.deinit(allocator);
+    }
+
+    pub fn getColor(self: *const Resources, name: []const u8) ?types.Color {
+        if (self.colors.get(name)) |entry| return entry;
+        return null;
+    }
+
+    pub fn getFont(self: *const Resources, name: []const u8) ?types.FontMetrics {
+        if (self.fonts.get(name)) |entry| return entry;
+        return null;
     }
 };
 
@@ -266,10 +294,6 @@ pub fn main() !void {
     var stdin_reader_impl = std.fs.File.stdin().reader(&stdin_buf);
     const stdin_reader: *std.Io.Reader = &stdin_reader_impl.interface;
 
-    // Optional: keep a renderer across requests to amortize setup costs
-    // var renderer_instance = Renderer.init(allocator);
-    // defer renderer_instance.deinit(); // if Renderer supports this
-
     while (true) {
         // Read a single header line: "Content-Length: N"
         const header_line = readLineAlloc(allocator, stdin_reader, 4096) catch |err| {
@@ -421,19 +445,20 @@ fn parseRequest(allocator: std.mem.Allocator, parser: *Parser) !Request {
         for (root_element.children.items) |*child| {
             if (std.mem.eql(u8, child.name, "constraint")) {
                 req.constraint = try parseConstraintElement(child);
+            } else if (std.mem.eql(u8, child.name, "resources")) {
+                try parseResources(allocator, child, &req.resources);
             } else {
                 layout_child = child;
-                break;
             }
         }
 
         const target = layout_child orelse return ParseError.MissingRoot;
-        req.root = try buildLayoutNode(allocator, target);
+        req.root = try buildLayoutNode(allocator, target, &req.resources);
         return req;
     }
 
     // Treat first element as layout root by default.
-    req.root = try buildLayoutNode(allocator, &root_element);
+    req.root = try buildLayoutNode(allocator, &root_element, &req.resources);
     return req;
 }
 
@@ -462,7 +487,158 @@ fn parseConstraintDimension(value: []const u8) !?f32 {
     return try parseDimensionValue(trimmed);
 }
 
-fn buildLayoutNode(allocator: std.mem.Allocator, element: *const XmlElement) !LayoutNode {
+fn parseResources(allocator: std.mem.Allocator, element: *const XmlElement, resources: *Resources) !void {
+    for (element.children.items) |*child| {
+        if (std.mem.eql(u8, child.name, "color")) {
+            try parseColorResource(allocator, child, resources);
+        } else if (std.mem.eql(u8, child.name, "font")) {
+            try parseFontResource(allocator, child, resources);
+        }
+    }
+}
+
+fn parseColorResource(
+    allocator: std.mem.Allocator,
+    element: *const XmlElement,
+    resources: *Resources,
+) !void {
+    var name: ?[]const u8 = null;
+    var value_attr: ?[]const u8 = null;
+
+    for (element.attributes.items) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "name")) {
+            name = attribute.value;
+        } else if (std.mem.eql(u8, attribute.name, "value")) {
+            value_attr = attribute.value;
+        }
+    }
+
+    const key = name orelse return ParseError.InvalidColorResource;
+    const value_str = value_attr orelse return ParseError.InvalidColorResource;
+    const color = try parseColorLiteral(value_str, ParseError.InvalidColorResource);
+    try resources.colors.put(allocator, key, color);
+}
+
+fn parseFontResource(
+    allocator: std.mem.Allocator,
+    element: *const XmlElement,
+    resources: *Resources,
+) !void {
+    var name: ?[]const u8 = null;
+    var char_width: ?f32 = null;
+    var line_height: ?f32 = null;
+
+    for (element.attributes.items) |attribute| {
+        if (std.mem.eql(u8, attribute.name, "name")) {
+            name = attribute.value;
+        } else if (std.mem.eql(u8, attribute.name, "charWidth")) {
+            char_width = try parseFloatAttribute(attribute.value);
+        } else if (std.mem.eql(u8, attribute.name, "lineHeight")) {
+            line_height = try parseFloatAttribute(attribute.value);
+        }
+    }
+
+    const key = name orelse return ParseError.InvalidFontResource;
+    var metrics = types.FontMetrics.defaults();
+    if (char_width) |cw| metrics.char_width = cw;
+    if (line_height) |lh| metrics.line_height = lh;
+    try resources.fonts.put(allocator, key, metrics);
+}
+
+fn parseFloatAttribute(value: []const u8) !f32 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return ParseError.InvalidFontResource;
+    return std.fmt.parseFloat(f32, trimmed) catch ParseError.InvalidFontResource;
+}
+
+fn parseColorLiteral(value: []const u8, comptime invalid_error: ParseError) !types.Color {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len < 2 or trimmed[0] != '#') return invalid_error;
+    const hex = trimmed[1..];
+
+    return switch (hex.len) {
+        3 => types.Color{
+            .a = 0xFF,
+            .r = try dupNibble(hex[0], invalid_error),
+            .g = try dupNibble(hex[1], invalid_error),
+            .b = try dupNibble(hex[2], invalid_error),
+        },
+        4 => types.Color{
+            .a = try dupNibble(hex[0], invalid_error),
+            .r = try dupNibble(hex[1], invalid_error),
+            .g = try dupNibble(hex[2], invalid_error),
+            .b = try dupNibble(hex[3], invalid_error),
+        },
+        6 => types.Color{
+            .a = 0xFF,
+            .r = try hexPair(hex[0], hex[1], invalid_error),
+            .g = try hexPair(hex[2], hex[3], invalid_error),
+            .b = try hexPair(hex[4], hex[5], invalid_error),
+        },
+        8 => types.Color{
+            .a = try hexPair(hex[0], hex[1], invalid_error),
+            .r = try hexPair(hex[2], hex[3], invalid_error),
+            .g = try hexPair(hex[4], hex[5], invalid_error),
+            .b = try hexPair(hex[6], hex[7], invalid_error),
+        },
+        else => return invalid_error,
+    };
+}
+
+fn dupNibble(c: u8, comptime invalid_error: ParseError) !u8 {
+    const nib = try hexNibble(c, invalid_error);
+    return nib * 16 + nib;
+}
+
+fn hexPair(high: u8, low: u8, comptime invalid_error: ParseError) !u8 {
+    const hi = try hexNibble(high, invalid_error);
+    const lo = try hexNibble(low, invalid_error);
+    return hi * 16 + lo;
+}
+
+fn hexNibble(c: u8, comptime invalid_error: ParseError) !u8 {
+    return switch (c) {
+        '0'...'9' => c - '0',
+        'a'...'f' => c - 'a' + 10,
+        'A'...'F' => c - 'A' + 10,
+        else => invalid_error,
+    };
+}
+
+fn resolveColor(value: []const u8, resources: *const Resources) !?types.Color {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    if (trimmed[0] == '@') {
+        const prefix = "@color/";
+        if (!std.mem.startsWith(u8, trimmed, prefix)) return ParseError.InvalidColorReference;
+        const name = trimmed[prefix.len..];
+        if (name.len == 0) return ParseError.InvalidColorReference;
+        if (resources.getColor(name)) |color| return color;
+        return ParseError.UnknownColorResource;
+    }
+
+    if (trimmed[0] == '#') {
+        return try parseColorLiteral(trimmed, ParseError.InvalidColorReference);
+    }
+
+    return ParseError.InvalidColorReference;
+}
+
+fn resolveFont(value: []const u8, resources: *const Resources) !?types.FontMetrics {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    const prefix = "@font/";
+    if (!std.mem.startsWith(u8, trimmed, prefix)) return ParseError.InvalidFontReference;
+    const name = trimmed[prefix.len..];
+    if (name.len == 0) return ParseError.InvalidFontReference;
+
+    if (resources.getFont(name)) |font| return font;
+    return ParseError.UnknownFontResource;
+}
+
+fn buildLayoutNode(allocator: std.mem.Allocator, element: *const XmlElement, resources: *const Resources) !LayoutNode {
     const view_type = try parseViewType(element.name);
     var node_instance = LayoutNode{
         .view_type = view_type,
@@ -470,14 +646,17 @@ fn buildLayoutNode(allocator: std.mem.Allocator, element: *const XmlElement) !La
         .text = null,
         .text_owned = false,
         .orientation = .vertical,
+        .background_color = null,
+        .text_color = null,
+        .font = null,
         .children = .{},
     };
     errdefer node_instance.deinit(allocator);
 
-    try applyAttributes(allocator, &node_instance, element);
+    try applyAttributes(allocator, &node_instance, element, resources);
 
     for (element.children.items) |*child_element| {
-        var child_node = try buildLayoutNode(allocator, child_element);
+        var child_node = try buildLayoutNode(allocator, child_element, resources);
         node_instance.children.append(allocator, child_node) catch |err| {
             child_node.deinit(allocator);
             return err;
@@ -490,7 +669,12 @@ fn parseViewType(name: []const u8) !types.ViewType {
     return views.inferViewType(name);
 }
 
-fn applyAttributes(allocator: std.mem.Allocator, node_instance: *LayoutNode, element: *const XmlElement) !void {
+fn applyAttributes(
+    allocator: std.mem.Allocator,
+    node_instance: *LayoutNode,
+    element: *const XmlElement,
+    resources: *const Resources,
+) !void {
     for (element.attributes.items) |attribute| {
         if (std.mem.eql(u8, attribute.name, "android:layout_width")) {
             node_instance.params.width = try parseSizeSpec(attribute.value);
@@ -524,6 +708,12 @@ fn applyAttributes(allocator: std.mem.Allocator, node_instance: *LayoutNode, ele
             node_instance.params.margin.right = try parseDimensionValue(attribute.value);
         } else if (std.mem.eql(u8, attribute.name, "android:layout_marginBottom")) {
             node_instance.params.margin.bottom = try parseDimensionValue(attribute.value);
+        } else if (std.mem.eql(u8, attribute.name, "android:background")) {
+            node_instance.background_color = try resolveColor(attribute.value, resources);
+        } else if (std.mem.eql(u8, attribute.name, "android:textColor")) {
+            node_instance.text_color = try resolveColor(attribute.value, resources);
+        } else if (std.mem.eql(u8, attribute.name, "android:fontFamily")) {
+            node_instance.font = try resolveFont(attribute.value, resources);
         }
     }
     if (node_instance.view_type == .text and node_instance.text == null) {
@@ -577,7 +767,16 @@ fn parseDimensionValue(value: []const u8) !f32 {
 
     const num = t[0..i];
     // No trailing garbage allowed (exactly like your original behavior)
-    if (i != t.len) return ParseError.InvalidDimension;
+    const suffix = t[i..];
+    if (suffix.len != 0) {
+        if (!std.ascii.eqlIgnoreCase(suffix, "dp") and
+            !std.ascii.eqlIgnoreCase(suffix, "dip") and
+            !std.ascii.eqlIgnoreCase(suffix, "sp") and
+            !std.ascii.eqlIgnoreCase(suffix, "px"))
+        {
+            return ParseError.InvalidDimension;
+        }
+    }
 
     return std.fmt.parseFloat(f32, num) catch ParseError.InvalidDimension;
 }
@@ -756,6 +955,10 @@ fn writeRenderedNodeJson(
     try writeIndent(writer, indent + 1);
     try writer.writeAll("},\n");
 
+    if (rendered.background_color) |bg| {
+        try writeColorField(writer, indent + 1, "background_color", bg);
+    }
+
     // --- optional text ---
     if (rendered.text) |txt| {
         try writeIndent(writer, indent + 1);
@@ -764,10 +967,25 @@ fn writeRenderedNodeJson(
         try writer.writeAll("\",\n");
     }
 
+    if (rendered.text_color) |fg| {
+        try writeColorField(writer, indent + 1, "text_color", fg);
+    }
+
     // --- optional orientation ---
     if (rendered.orientation) |orient| {
         try writeIndent(writer, indent + 1);
         try writer.print("\"orientation\": \"{s}\",\n", .{orientationName(orient)});
+    }
+
+    if (rendered.font) |font| {
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("\"font\": {\n");
+        try writeIndent(writer, indent + 2);
+        try writer.print("\"char_width\": {d},\n", .{font.char_width});
+        try writeIndent(writer, indent + 2);
+        try writer.print("\"line_height\": {d}\n", .{font.line_height});
+        try writeIndent(writer, indent + 1);
+        try writer.writeAll("},\n");
     }
 
     // --- children ---
@@ -796,6 +1014,28 @@ fn writeRenderedNodeJson(
     try writer.writeAll("]\n");
     try writeIndent(writer, indent);
     try writer.writeAll("}");
+}
+
+fn writeColorField(
+    writer: *std.Io.Writer,
+    indent: usize,
+    label: []const u8,
+    color: types.Color,
+) !void {
+    try writeIndent(writer, indent);
+    try writer.writeByte('"');
+    try writer.writeAll(label);
+    try writer.writeAll("\": \"");
+    try writeColorHex(writer, color);
+    try writer.writeAll("\",\n");
+}
+
+fn writeColorHex(writer: *std.Io.Writer, color: types.Color) !void {
+    if (color.a != 0xFF) {
+        try writer.print("#{X:0>2}{X:0>2}{X:0>2}{X:0>2}", .{ color.a, color.r, color.g, color.b });
+    } else {
+        try writer.print("#{X:0>2}{X:0>2}{X:0>2}", .{ color.r, color.g, color.b });
+    }
 }
 
 fn writeIndent(writer: *std.Io.Writer, indent: usize) !void {

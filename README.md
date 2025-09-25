@@ -1,55 +1,46 @@
 # Valkary Studio LayoutLib
 
-Valkary Studio LayoutLib is an experimental reimplementation of the Android Studio
-layoutlib renderer written in [Zig](https://ziglang.org/). The library focuses on
-providing a clean, idiomatic Zig API for building lightweight view hierarchies and
-running deterministic layout passes without depending on the Android runtime.
+An experimental reimplementation of the Android Studio layoutlib renderer written in [Zig](https://ziglang.org/). This library provides a clean, idiomatic Zig API for building lightweight view hierarchies and running deterministic layout passes without depending on the Android runtime.
 
-## Goals
+## Features
 
-* Offer a composable Zig data model that mirrors the core pieces of Google's
-  Java layoutlib (layout nodes, layout params and rendering output).
-* Provide a deterministic layout engine capable of computing frames for
-  vertical and horizontal linear layouts, basic containers and text elements.
-* Serve as a foundation for future work toward feature parity with the Android
-  renderer while remaining simple enough to experiment with new ideas.
+- **Composable data model** that mirrors core Android layoutlib components (layout nodes, layout params, and rendering output)
+- **Deterministic layout engine** for vertical/horizontal linear layouts, basic containers, and text elements
+- **Foundation for future development** toward feature parity with Android renderer while remaining simple and extensible
+- **JSON-over-stdio daemon** for easy integration with other languages
 
-## Project structure
+## Project Structure
 
 ```
-├── build.zig          # Zig build script that exposes the `layoutlib` library
-├── src
-│   ├── layout
-│   │   ├── node.zig   # Layout tree representation
-│   │   ├── renderer.zig # Rendering and layout engine
-│   │   └── types.zig  # Shared enums, structs and helpers
-│   └── lib.zig        # Public API surface and tests
+├── build.zig                 # Zig build script exposing the layoutlib library
+├── src/
+│   ├── layout/
+│   │   ├── node.zig          # Layout tree representation
+│   │   ├── renderer.zig      # Rendering and layout engine
+│   │   └── types.zig         # Shared enums, structs and helpers
+│   └── lib.zig               # Public API surface and tests
 └── README.md
 ```
 
-## Getting started
+## Quick Start
 
-> **Note:** Zig is not pre-installed in every environment. Install Zig 0.11+
-> locally to build or run the examples.
+### Prerequisites
 
-Build and run the unit tests:
+Zig 0.15.1+ is required. [Install Zig](https://ziglang.org/download/) locally to build and run examples.
 
-```sh
+### Build and Test
+
+```bash
+# Run unit tests
 zig build test
-```
 
-The project also exposes a JSON-over-stdio daemon that can be launched with:
-
-```sh
+# Launch JSON-over-stdio daemon
 zig build daemon
 ```
 
-The daemon reads framed XML requests from stdin and writes JSONC responses to
-stdout. Each response carries the base64 preview image and structured layout
-tree, making it straightforward to integrate with Swift or any other host
-language that can manage a child process.
+The daemon reads framed XML requests from stdin and writes JSONC responses to stdout. Each response includes a base64 preview image and structured layout tree for easy integration with Swift or other host languages.
 
-## Usage example
+## Usage Example
 
 ```zig
 const std = @import("std");
@@ -60,6 +51,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // Create a vertical linear layout
     var root = layoutlib.LayoutNode.linearLayout(layoutlib.LayoutParams{
         .width = .wrap_content,
         .height = .wrap_content,
@@ -67,13 +59,19 @@ pub fn main() !void {
     }, .vertical);
     defer root.deinit(allocator);
 
+    // Add child text nodes
     try root.addChild(allocator, layoutlib.LayoutNode.text(.{}, "Title"));
     try root.addChild(allocator, layoutlib.LayoutNode.text(.{}, "Description"));
 
+    // Render the layout
     var renderer = layoutlib.Renderer.init(allocator);
-    var rendered = try renderer.render(&root, layoutlib.Constraint{ .width = 240, .height = null });
+    var rendered = try renderer.render(&root, layoutlib.Constraint{ 
+        .width = 240, 
+        .height = null 
+    });
     defer rendered.deinit(allocator);
 
+    // Print computed positions and dimensions
     for (rendered.children.items) |child| {
         std.debug.print("{s}: ({d:.2}, {d:.2}) -> {d:.2}x{d:.2}\n", .{
             child.text orelse "view",
@@ -86,19 +84,18 @@ pub fn main() !void {
 }
 ```
 
-The example builds a small vertical layout composed of two text nodes and prints
-out the computed positions and dimensions for each child view.
+This example creates a vertical layout with two text nodes and prints their computed frames.
 
-## Daemon protocol
+## Daemon Protocol
 
-Each request begins with a `Content-Length` header that specifies the number of
-bytes that follow, immediately followed by a newline and the XML payload. The
-root element can either be a `<layout-request>` envelope or a layout root
-element such as `<LinearLayout>`. The optional envelope allows you to pass a
-correlation ID and layout constraints alongside the Android XML layout:
+### Request Format
 
-```
+Requests begin with a `Content-Length` header followed by XML payload. The root element can be either a `<layout-request>` envelope or a layout element like `<LinearLayout>`.
+
+**Example with envelope:**
+```xml
 Content-Length: 333
+
 <layout-request id="example" action="render">
   <constraint width="240" />
   <LinearLayout
@@ -118,14 +115,12 @@ Content-Length: 333
 </layout-request>
 ```
 
-The daemon replies with an JSONC object describing the computed layout tree. The
-response echoes the request ID when present, includes a base64 encoded PNG
-preview of the rendered hierarchy, and exposes the resolved frame, margin,
-padding, text, and orientation metadata directly within the JSON payload:
+### Response Format
+
+The daemon returns a JSONC object with the computed layout tree:
 
 ```jsonc
 {
-  // Layout render payload encoded as JSON for Valkary Studio integration.
   "status": "ok",
   "result": {
     "image": "iVBORw0KGgoAAAANSUhEUgAAA...",
@@ -139,16 +134,12 @@ padding, text, and orientation metadata directly within the JSON payload:
         {
           "type": "text",
           "frame": { "x": 8, "y": 8, "width": 60, "height": 16 },
-          "margin": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
-          "padding": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
           "text": "Hello",
           "children": []
         },
         {
           "type": "text",
           "frame": { "x": 8, "y": 24, "width": 60, "height": 16 },
-          "margin": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
-          "padding": { "left": 0, "top": 0, "right": 0, "bottom": 0 },
           "text": "World",
           "children": []
         }
@@ -158,15 +149,52 @@ padding, text, and orientation metadata directly within the JSON payload:
 }
 ```
 
-Errors use the same JSONC envelope with `status: "error"` and an `error`
-object containing a descriptive `message`. Diagnostics are printed to stderr.
-Send EOF (Ctrl+D) to terminate the process.
+Errors return `"status": "error"` with a descriptive message. Send EOF (Ctrl+D) to terminate.
+
+### Advanced Example with Resources
+
+Launch the daemon with custom colors and fonts:
+
+```bash
+payload=$(cat <<'EOF'
+<layout-request id="resource-demo" action="render">
+  <constraint width="300" />
+  <resources>
+    <color name="brandPrimary" value="#0A84FF" />
+    <color name="brandOnPrimary" value="#10131B" />
+    <font name="headline" charWidth="8" lineHeight="24" />
+  </resources>
+  <LinearLayout
+      android:layout_width="match_parent"
+      android:layout_height="wrap_content"
+      android:orientation="vertical"
+      android:padding="16dp"
+      android:background="@color/brandPrimary">
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Headline"
+        android:textColor="@color/brandOnPrimary"
+        android:fontFamily="@font/headline" />
+  </LinearLayout>
+</layout-request>
+EOF
+)
+
+content_length=$(printf %s "$payload" | wc -c | tr -d ' ')
+{
+  printf 'Content-Length: %s\n' "$content_length"
+  printf '%s' "$payload"
+} | zig build daemon
+```
 
 ## Roadmap
 
-* Implement parsing of Android XML layout resources.
-* Support more layout containers (FrameLayout, RelativeLayout, ConstraintLayout).
-* Introduce a resource loading pipeline compatible with Android theme assets.
-* Provide tooling integrations for design-time previews.
+- [ ] Parse Android XML layout resources
+- [ ] Support additional layout containers (FrameLayout, RelativeLayout, ConstraintLayout)
+- [ ] Implement resource loading pipeline compatible with Android theme assets
+- [ ] Provide tooling integrations for design-time previews
 
-Contributions and feedback are welcome!
+## Contributing
+
+Contributions and feedback are welcome! Please feel free to submit issues and pull requests.

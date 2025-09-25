@@ -101,9 +101,15 @@ fn drawNode(
     depth: usize,
 ) void {
     if (frameToRect(node.frame, width, height)) |rect| {
-        const fill = fill_palette[depth % fill_palette.len];
-        const border = border_palette[depth % border_palette.len];
-        drawRect(pixels, width, height, rect, fill, border);
+        const fill_color = if (node.background_color) |bg|
+            convertColor(bg)
+        else
+            fill_palette[depth % fill_palette.len];
+        const border_color = if (node.background_color) |bg|
+            convertColor(darkenColor(bg, 0.8))
+        else
+            border_palette[depth % border_palette.len];
+        drawRect(pixels, width, height, rect, fill_color, border_color);
     }
     var i: usize = 0;
     while (i < node.children.items.len) : (i += 1) {
@@ -189,6 +195,25 @@ pub fn drawRect(
             pixels[idx + 3] = 0xFF;
         }
     }
+}
+
+fn convertColor(color: types.Color) Color {
+    return .{ .r = color.r, .g = color.g, .b = color.b };
+}
+
+fn darkenColor(color: types.Color, factor: f32) types.Color {
+    return .{
+        .r = scaleComponent(color.r, factor),
+        .g = scaleComponent(color.g, factor),
+        .b = scaleComponent(color.b, factor),
+        .a = color.a,
+    };
+}
+
+fn scaleComponent(value: u8, factor: f32) u8 {
+    const scaled = @as(f32, @floatFromInt(value)) * factor;
+    const clamped = std.math.clamp(scaled, 0.0, 255.0);
+    return @intFromFloat(clamped);
 }
 
 /// Encodes RGBA8 pixels (width*height*4) as a PNG.
